@@ -24,6 +24,7 @@ function sftp_init {
 }
 
 function sftp_do {
+	# Fixme: Error handling
 	echo "$@" >&3
 	echo "" >&3
 	local RCVD=''
@@ -52,6 +53,7 @@ function sftp_end {
 	trap - SIGCHLD
 	sftp_do "bye"
 	cleanup
+	return 0
 }
 
 function cleanup {
@@ -70,5 +72,6 @@ function child {
 		trap - SIGCHLD
 		echo "Unexpected death of SFTP worker." >&2
 		cleanup
+		return 1
 	fi
 }
