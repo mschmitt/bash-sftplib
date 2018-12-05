@@ -1,22 +1,25 @@
 function sftp_init {
+	# Enable job control so the sftp client can be monitored
 	set -o monitor
 
-	PIPE_DIR=$(mktemp -d)
-	chmod 700 "$PIPE_DIR"
+	# Prepare fifos used for communicating with sftp client
+	PIPE_TO=$(mktemp -u)
+	mkfifo -m 600 "$PIPE_TO"
+	PIPE_FROM=$(mktemp -u)
+	mkfifo -m 600 "$PIPE_FROM"
 
-	PIPE_TO="$PIPE_DIR/pipe_to_ssh"
-	mkfifo "$PIPE_TO"
-	chmod 600 "$PIPE_TO"
-
-	PIPE_FROM="$PIPE_DIR/pipe_from_ssh"
-	mkfifo "$PIPE_FROM"
-	chmod 600 "$PIPE_FROM"
-
+	# Launch sftp in stdin/stdout mode connected to the fifos
 	sftp "$@" < "$PIPE_TO" > "$PIPE_FROM" &
 
+	# Connect fifos to file descriptors
 	exec 3> "$PIPE_TO"
 	exec 4< "$PIPE_FROM"
 
+	# All fifos are connected; unlink from filesystem
+	rm "$PIPE_TO"
+	rm "$PIPE_FROM"
+
+	# Signal handler if any child process exits
 	trap child SIGCHLD
 }
 
@@ -31,7 +34,9 @@ function sftp_do {
 		then
 			if [[ "$RCVD" == 'sftp> ' ]] # prompt
 			then
+				# Discard prompt output itself.
 				RCVD=''
+				# sftp_do is done
 				return
 			else
 				echo "$RCVD"
@@ -43,28 +48,25 @@ function sftp_do {
 
 function sftp_end {
 	echo "Ending session" >&2
+	# Signal handler no longer required
 	trap - SIGCHLD
 	sftp_do "bye"
 	cleanup
 }
 
 function cleanup {
-	echo "Cleaning up:" >&2
-	echo "1) Closing file descriptors." >&2
+	echo "Closing file descriptors." >&2
 	exec 3>&- 
 	exec 4<&- 
-	echo "2) Deleting fifos." >&2
-	rm "$PIPE_TO"
-	rm "$PIPE_FROM"
-	echo "3) Deleting fifo directory." >&2
-	rmdir "$PIPE_DIR"
-	echo "Done." >&2
 }
 
 function child {
+	# Only take action if the exiting child process
+	# was our sftp client.
 	jobs | grep -v jobs | grep -q 'Running.*sftp'
 	if [[ $? -eq 1 ]]
 	then
+		# Signal handler no longer required
 		trap - SIGCHLD
 		echo "Unexpected death of SFTP worker." >&2
 		cleanup
